@@ -1,0 +1,13 @@
+Have plain uploads and encrypted uploads files directory.
+
+whenever i upload file i have both plain and necrypted file uplaoded
+
+# encryption speed 
+# upload speed [plain, encrypted]
+# download speedv [plain, encrypted]
+# file sizes [encrypted, non encrypted]
+
+# decryption speed
+# file transfer speed
+
+# How encryption affect metrics being measured

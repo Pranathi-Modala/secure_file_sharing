@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secure File Transfer System</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <div class="header">
+        <h1>Secure File Transfer System</h1>
+        <p>Week 6 Security Hardening | Flask Backend with AES Encryption</p>
+        <p id="user-status">Not logged in</p>
+      </div>
+
+      <!-- Messages Container -->
+      <div id="messages" style="padding: 0 20px"></div>
+
+      <!-- Authentication Panel -->
+      <div id="auth-container" class="auth-container">
+        <div class="auth-box">
+          <!-- Login Form -->
+          <div data-form="login">
+            <h2>Login</h2>
+            <div class="form-group">
+              <label>Username</label>
+              <input
+                type="text"
+                id="input-login-username"
+                placeholder="e.g., alice"
+              />
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input
+                type="password"
+                id="input-login-password"
+                placeholder="Enter password"
+              />
+            </div>
+            <div class="button-group">
+              <button class="btn-primary" id="btn-login">Login</button>
+            </div>
+            <div class="tab-switch">
+              <p>Don't have an account?</p>
+              <button class="btn-secondary" id="btn-toggle-register">
+                Create Account
+              </button>
+            </div>
+
+            <div class="card" style="margin-top: 20px">
+              <h3>Access Accounts</h3>
+              <p><strong>alice</strong> / alice123</p>
+              <p><strong>bob</strong> / bob123</p>
+              <p><strong>admin</strong> / admin123</p>
+            </div>
+          </div>
+
+          <!-- Register Form -->
+          <div data-form="register" style="display: none">
+            <h2>Create Account</h2>
+            <div class="form-group">
+              <label>Username</label>
+              <input
+                type="text"
+                id="input-register-username"
+                placeholder="Choose username"
+              />
+            </div>
+            <div class="form-group">
+              <label>Email</label>
+              <input
+                type="email"
+                id="input-register-email"
+                placeholder="your@email.com"
+              />
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input
+                type="password"
+                id="input-register-password"
+                placeholder="Min 6 characters"
+              />
+            </div>
+            <div class="button-group">
+              <button class="btn-primary" id="btn-register-submit">
+                Register
+              </button>
+            </div>
+            <div class="tab-switch">
+              <p>Already have an account?</p>
+              <button class="btn-secondary" id="btn-toggle-login">Login</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard -->
+      <div id="dashboard" class="dashboard">
+        <!-- Sidebar -->
+        <div class="sidebar">
+          <h3>Menu</h3>
+          <button class="btn-primary" data-section="upload">Upload File</button>
+          <button data-section="my-files">My Files</button>
+          <button data-section="shared-files">Shared with Me</button>
+          <button data-section="stats">Statistics</button>
+          <hr
+            style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0"
+          />
+          <h3>👤 Account</h3>
+          <button id="btn-logout" class="btn-secondary">Logout</button>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+          <!-- Upload Section -->
+          <div id="section-upload" class="section active">
+            <h2 class="section-title">Upload & Encrypt File</h2>
+            <div class="card">
+              <h3>Upload New File</h3>
+              <p>
+                Select a file to upload. It will be encrypted and stored in both
+                plain and encrypted upload directories for secure transfer
+                testing.
+              </p>
+              <div class="form-group" style="margin-top: 15px">
+                <label>Select File</label>
+                <input type="file" id="input-file" />
+              </div>
+              <div class="button-group">
+                <button class="btn-primary" id="btn-upload">Upload</button>
+              </div>
+              <p style="margin-top: 15px; font-size: 0.9em; color: #666">
+                <strong>Workflow:</strong><br />
+                1. Select and upload a file<br />
+                2. System generates encryption key<br />
+                3. File is encrypted with AES-256<br />
+                4. Share file with others by providing the key
+              </p>
+            </div>
+          </div>
+
+          <!-- My Files Section -->
+          <div id="section-my-files" class="section">
+            <h2 class="section-title">My Uploaded Files</h2>
+            <div class="card">
+              <h3>Your Files</h3>
+              <button
+                class="btn-primary"
+                id="btn-refresh-files"
+                style="margin-bottom: 15px"
+              >
+                Refresh
+              </button>
+              <div
+                id="my-files-list"
+                style="display: flex; flex-direction: column"
+              >
+                <p style="text-align: center; color: #999">Loading files...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Shared Files Section -->
+          <div id="section-shared-files" class="section">
+            <h2 class="section-title">Files Shared With Me</h2>
+            <div class="card">
+              <h3>Shared Files</h3>
+              <p style="margin-bottom: 15px; font-size: 0.9em; color: #666">
+                To download a file, you need the encryption key. Ask the file
+                owner for the key.
+              </p>
+              <button
+                class="btn-primary"
+                id="btn-refresh-shared"
+                style="margin-bottom: 15px"
+              >
+                Refresh
+              </button>
+              <div
+                id="shared-files-list"
+                style="display: flex; flex-direction: column"
+              >
+                <p style="text-align: center; color: #999">
+                  No files shared yet
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Statistics Section -->
+          <div id="section-stats" class="section">
+            <h2 class="section-title">System Statistics</h2>
+
+            <div class="stats-grid" id="stats-container">
+              <div class="stat-card">
+                <div class="stat-value">-</div>
+                <div class="stat-label">Total Files</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">-</div>
+                <div class="stat-label">Users Online</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">-</div>
+                <div class="stat-label">Downloads</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>System Information</h3>
+              <p><strong>Encryption:</strong> AES-256 (Fernet)</p>
+              <p><strong>Authentication:</strong> PBKDF2 with SHA-256</p>
+              <p><strong>Backend:</strong> Python Flask</p>
+              <p style="margin-top: 15px; font-size: 0.9em; color: #666">
+                All files are encrypted on the server. Only users with the
+                encryption key can decrypt files.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Share Modal -->
+      <div id="share-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">Share File</div>
+          <div class="form-group">
+            <label>Share with User</label>
+            <select id="input-share-recipient"></select>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="checkbox-include-key" checked />
+              Provide encryption key to recipient
+            </label>
+            <p style="font-size: 0.85em; color: #999; margin-top: 5px">
+              ✓ Recommended: If checked, recipient can directly decrypt the file
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-primary" id="btn-share-confirm">Share</button>
+            <button class="btn-secondary" id="btn-share-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p>Secure File Transfer System | Week 6 Security Hardening Build</p>
+        <p>Python Flask Backend | AES-256 Encryption | Local File Storage</p>
+        <p>
+          All data is processed securely. Files are stored in plain and
+          encrypted upload directories for comparison metrics.
+        </p>
+      </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+  </body>
+</html>

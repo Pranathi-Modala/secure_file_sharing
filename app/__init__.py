@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 # Import configuration from config.py
 import config
+from modules.database import db_manager
 
 def create_app():
     """
@@ -35,12 +36,18 @@ def create_app():
     app.config['UPLOAD_FOLDER'] = str(config.config.UPLOAD_FOLDER)
     app.config['PLAIN_UPLOAD_FOLDER'] = str(config.config.PLAIN_UPLOAD_FOLDER)
     app.config['ENCRYPTED_UPLOAD_FOLDER'] = str(config.config.ENCRYPTED_UPLOAD_FOLDER)
+    app.config['DATABASE_URL'] = config.config.DATABASE_URL
 
     # Directories are created by config.validate() during initialization
     # but ensure they exist at app creation time
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(app.config['PLAIN_UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(app.config['ENCRYPTED_UPLOAD_FOLDER'], exist_ok=True)
+
+    # Ensure required database tables exist before serving requests.
+    if db_manager is None:
+        raise RuntimeError('Database manager is not configured. Check DATABASE_URL settings.')
+    db_manager.initialize_schema()
 
     # Register blueprints (routes)
     from routes.auth_routes import auth_bp

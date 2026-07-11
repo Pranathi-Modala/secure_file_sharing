@@ -5,48 +5,17 @@ AUTHENTICATION MODULE - Python Backend
 Manages user authentication and authorization
 Handles user database and session management
 Part of Week 2-3 Secure File Transfer System
-Week 5: Environment Hardening - Uses configured demo users
+Week 7: PostgreSQL-backed account storage for registration and login
 
 OOP Architecture with User and AuthManager classes
 """
 
 import hashlib
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
-import sys
 
-
-class User:
-    """
-    Represents a user in the system
-    """
-
-    def __init__(self, user_id, username, password_hash, email, created_at):
-        """
-        Initialize user object
-
-        Args:
-            user_id (int): Unique user identifier
-            username (str): Username
-            password_hash (str): Hashed password
-            email (str): User email
-            created_at (str): Account creation timestamp
-        """
-        self.user_id = user_id
-        self.username = username
-        self.password_hash = password_hash
-        self.email = email
-        self.created_at = created_at
-
-    def to_dict(self):
-        """Convert user to dictionary"""
-        return {
-            'user_id': self.user_id,
-            'username': self.username,
-            'email': self.email,
-            'created_at': self.created_at
-        }
+from modules.database import db_manager
 
 
 class AuthenticationManager:
@@ -55,37 +24,15 @@ class AuthenticationManager:
     Handles login, registration, and user management
     """
 
-    def __init__(self, demo_users=None):
+    def __init__(self, database_manager=None):
         """
         Initialize authentication manager
-        
-        Args:
-            demo_users (list): List of demo users (username, password, email) tuples
         """
-        self.users = {}  # {username: User object}
-        self.next_user_id = 1
+        self.db = database_manager
         self.login_attempts = {}  # Track failed attempts
         self.active_sessions = {}  # {session_id: {username, login_time}}
         self.auth_logs = []  # Authentication event logs
         self.logger = logging.getLogger(__name__)
-        self.demo_users = demo_users or []
-
-        # Initialize default demo users
-        self._initialize_demo_users()
-
-    def _initialize_demo_users(self):
-        """
-        Initialize demo users for testing
-        Uses demo_users list passed to constructor (from config)
-        """
-        if not self.demo_users:
-            self.logger.warning('⚠️ No demo users configured (empty DEMO_USERS)')
-            return
-
-        for username, password, email in self.demo_users:
-            self._create_user(username, password, email)
-
-        self.logger.info(f'✓ Demo users initialized ({len(self.demo_users)} users)')
 
     @staticmethod
     def hash_password(password, salt=None):
@@ -124,23 +71,21 @@ class AuthenticationManager:
         Returns:
             dict: Result with success status
         """
-        if username in self.users:
-            return {'success': False, 'message': 'User already exists'}
+        if not self.db:
+            return {'success': False, 'message': 'Database is not configured'}
 
         password_hash, salt = self.hash_password(password)
-        user = User(
-            user_id=self.next_user_id,
+        stored_password_hash = f"{password_hash.hex()}:{salt.hex()}"
+        result = self.db.create_user(
             username=username,
-            password_hash=f"{password_hash.hex()}:{salt.hex()}",
-            email=email,
-            created_at=datetime.now().isoformat()
+            password_hash=stored_password_hash,
+            email=email
         )
 
-        self.users[username] = user
-        self.next_user_id += 1
+        if result['success']:
+            self.logger.info(f'✓ User created: {username}')
 
-        self.logger.info(f'✓ User created: {username}')
-        return {'success': True, 'user': user.to_dict()}
+        return result
 
     def register_user(self, username, password, email):
         """
@@ -161,6 +106,9 @@ class AuthenticationManager:
         if not password or len(password) < 6:
             return {'success': False, 'message': 'Password must be at least 6 characters'}
 
+        if not email or '@' not in email:
+            return {'success': False, 'message': 'A valid email is required'}
+
         return self._create_user(username, password, email)
 
     def login(self, username, password):
@@ -176,16 +124,22 @@ class AuthenticationManager:
         """
         start_time = datetime.now()
 
+        user = self.get_user_by_username(username)
+
         # Check if user exists
-        if username not in self.users:
+        if not user:
             self._record_failed_attempt(username)
             self._log_auth_event(username, False, 'User not found')
             return {'success': False, 'message': 'Invalid username or password'}
 
-        user = self.users[username]
-
         # Verify password
-        stored_hash, salt_hex = user.password_hash.split(':')
+        password_hash = user.get('password_hash', '')
+        if ':' not in password_hash:
+            self._record_failed_attempt(username)
+            self._log_auth_event(username, False, 'Corrupt password hash')
+            return {'success': False, 'message': 'Invalid username or password'}
+
+        stored_hash, salt_hex = password_hash.split(':', 1)
         salt = bytes.fromhex(salt_hex)
         provided_hash, _ = self.hash_password(password, salt)
 
@@ -213,7 +167,12 @@ class AuthenticationManager:
             'success': True,
             'message': f'✓ Welcome {username}!',
             'session_id': session_id,
-            'user': user.to_dict(),
+            'user': {
+                'user_id': user['user_id'],
+                'username': user['username'],
+                'email': user['email'],
+                'created_at': user['created_at']
+            },
             'execution_time_ms': round(execution_time, 2)
         }
 
@@ -259,7 +218,10 @@ class AuthenticationManager:
         Returns:
             User object or None
         """
-        return self.users.get(username)
+        if not self.db:
+            return None
+
+        return self.db.get_user_by_username(username)
 
     def get_all_users(self):
         """
@@ -268,7 +230,19 @@ class AuthenticationManager:
         Returns:
             list: List of user dictionaries
         """
-        return [user.to_dict() for user in self.users.values()]
+        if not self.db:
+            return []
+
+        users = self.db.get_all_users()
+        return [
+            {
+                'user_id': user['user_id'],
+                'username': user['username'],
+                'email': user['email'],
+                'created_at': user['created_at']
+            }
+            for user in users
+        ]
 
     def _record_failed_attempt(self, username):
         """Record failed login attempt"""
@@ -323,7 +297,7 @@ class AuthenticationManager:
         failed_logins = len([l for l in self.auth_logs if not l['success']])
 
         return {
-            'total_users': len(self.users),
+            'total_users': len(self.get_all_users()),
             'active_sessions': len(self.active_sessions),
             'successful_logins': successful_logins,
             'failed_logins': failed_logins,
@@ -331,14 +305,5 @@ class AuthenticationManager:
         }
 
 
-# Create singleton instance with demo users from config
-try:
-    import config as cfg
-    auth_manager = AuthenticationManager(demo_users=cfg.config.DEMO_USERS)
-except ImportError:
-    # Fallback if config is not available
-    auth_manager = AuthenticationManager(demo_users=[
-        ('admin', 'admin123', 'admin@secure.com'),
-        ('alice', 'alice123', 'alice@secure.com'),
-        ('bob', 'bob123', 'bob@secure.com'),
-    ])
+# Create singleton instance backed by PostgreSQL
+auth_manager = AuthenticationManager(database_manager=db_manager)

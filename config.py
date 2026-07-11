@@ -10,6 +10,7 @@ Centralizes all application configuration and secrets management
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 
@@ -67,12 +68,11 @@ class Config:
         )
         self.LOG_LEVEL = os.getenv('LOG_LEVEL', 'DEBUG')
 
-        # Demo users (format: username:password:email | username:password:email)
-        demo_users_str = os.getenv(
-            'DEMO_USERS',
-            'admin:admin123:admin@secure.com|alice:alice123:alice@secure.com|bob:bob123:bob@secure.com'
+        # Database settings
+        self.DATABASE_URL = os.getenv(
+            'DATABASE_URL',
+            'postgresql://superAdmin:super%40admin@localhost:5432/models_db'
         )
-        self.DEMO_USERS = self._parse_demo_users(demo_users_str)
 
         # Security settings
         self.SESSION_TIMEOUT_MINUTES = int(os.getenv('SESSION_TIMEOUT_MINUTES', '30'))
@@ -84,7 +84,7 @@ class Config:
         self.KEY_ROTATION_POLICY = os.getenv('KEY_ROTATION_POLICY', 'none')
 
         # Storage mode
-        self.STORAGE_MODE = os.getenv('STORAGE_MODE', 'in-memory')
+        self.STORAGE_MODE = os.getenv('STORAGE_MODE', 'database')
 
         # Metrics/research settings
         self.METRICS_ENABLED = os.getenv('METRICS_ENABLED', 'True').lower() in ('true', '1', 'yes')
@@ -109,31 +109,6 @@ class Config:
         if path.is_absolute():
             return path
         return base_path / path
-
-    @staticmethod
-    def _parse_demo_users(demo_users_str):
-        """
-        Parse demo users from environment variable
-
-        Format: username:password:email | username:password:email
-
-        Args:
-            demo_users_str (str): Demo users configuration string
-
-        Returns:
-            list: List of tuples (username, password, email)
-        """
-        users = []
-        if not demo_users_str:
-            return users
-
-        for user_entry in demo_users_str.split('|'):
-            parts = user_entry.strip().split(':')
-            if len(parts) == 3:
-                username, password, email = parts
-                users.append((username.strip(), password.strip(), email.strip()))
-
-        return users
 
     def validate(self):
         """
@@ -168,9 +143,18 @@ class Config:
             errors.append(f'LOG_LEVEL must be one of {valid_levels}, got {self.LOG_LEVEL}')
 
         # Validate storage mode
-        valid_modes = ['in-memory', 'database']
+        valid_modes = ['database']
         if self.STORAGE_MODE.lower() not in valid_modes:
             errors.append(f'STORAGE_MODE must be one of {valid_modes}, got {self.STORAGE_MODE}')
+
+        # Validate DATABASE_URL format
+        parsed_url = urlparse(self.DATABASE_URL)
+        if parsed_url.scheme not in ['postgresql', 'postgresql+psycopg2']:
+            errors.append('DATABASE_URL must use postgresql scheme')
+        if not parsed_url.hostname:
+            errors.append('DATABASE_URL must include a host')
+        if not parsed_url.path or parsed_url.path == '/':
+            errors.append('DATABASE_URL must include a database name')
 
         # Create required directories
         try:
@@ -180,10 +164,6 @@ class Config:
             self.LOG_FOLDER.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             errors.append(f'Failed to create required directories: {str(e)}')
-
-        # Validate demo users
-        if not self.DEMO_USERS:
-            warnings.append('No demo users configured (DEMO_USERS is empty)')
 
         if errors:
             raise ConfigurationError(f'Configuration validation failed:\n' + '\n'.join(f'  ✗ {e}' for e in errors))
@@ -218,6 +198,7 @@ class Config:
             'encryption_algorithm': self.ENCRYPTION_ALGORITHM,
             'key_rotation_policy': self.KEY_ROTATION_POLICY,
             'storage_mode': self.STORAGE_MODE,
+            'database_url': self.DATABASE_URL,
             'metrics_enabled': self.METRICS_ENABLED,
         }
 

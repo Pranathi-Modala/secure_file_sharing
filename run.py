@@ -30,12 +30,7 @@ if __name__ == '__main__':
     print(f"  Upload Folder: {config.config.UPLOAD_FOLDER}")
     print(f"  Log Folder: {config.config.LOG_FOLDER}")
     print(f"  Storage Mode: {config.config.STORAGE_MODE}")
-    
-    # Display demo users
-    if config.config.DEMO_USERS:
-        print("\n👥 Demo Users Available:")
-        for username, password, email in config.config.DEMO_USERS:
-            print(f"  - {username} / {password} ({email})")
+    print(f"  Database URL: {config.config.DATABASE_URL}")
     
     print(f"""
     ✓ Starting Flask server...

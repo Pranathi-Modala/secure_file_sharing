@@ -13,6 +13,8 @@ from modules.logger import system_logger
 import logging
 import io
 import time
+import config
+from modules.metrics_repository import metrics_repository
 
 file_bp = Blueprint('files', __name__)
 
@@ -214,6 +216,14 @@ def download_file(file_id):
             system_logger.warning(
                 f'⚠ Incorrect encryption key used to download {file_id} by {username}'
             )
+            if config.config.STORAGE_MODE.lower() == 'cloud':
+                metrics_repository.log_event(
+                    event_type='failed_access',
+                    actor_username=username,
+                    file_id=file_id,
+                    event_status='failed',
+                    event_message='Incorrect encryption key'
+                )
             return jsonify({
                 'success': False,
                 'message': 'Incorrect encryption key'
@@ -256,6 +266,18 @@ def download_file(file_id):
             'file_transfer_speed_mbps': round(file_transfer_speed_mbps, 2)
         })
 
+        if config.config.STORAGE_MODE.lower() == 'cloud':
+            metrics_repository.log_event(
+                event_type='download',
+                actor_username=username,
+                file_id=file_id,
+                download_time_ms=round(download_total_time_ms, 2),
+                download_speed_mbps=round(plain_download_speed_mbps, 2),
+                transfer_speed_mbps=round(file_transfer_speed_mbps, 2),
+                event_status='success',
+                event_message='Encrypted file downloaded from cloud and decrypted for response',
+            )
+
         file_manager._log_operation({
             'operation': 'decryption',
             'filename': shared_file['filename'],
@@ -265,6 +287,16 @@ def download_file(file_id):
             'decryption_time_ms': decryption_time_ms,
             'decryption_speed_mbps': round(decryption_speed_mbps, 2)
         })
+
+        if config.config.STORAGE_MODE.lower() == 'cloud':
+            metrics_repository.log_event(
+                event_type='decryption',
+                actor_username=username,
+                file_id=file_id,
+                decryption_time_ms=round(decryption_time_ms, 2),
+                event_status='success',
+                event_message='File decrypted in application memory',
+            )
 
         system_logger.info(
             f'File downloaded and decrypted: {shared_file["filename"]} by {username} | download_time_ms={download_total_time_ms:.2f} | encrypted_download_speed_mbps={encrypted_download_speed_mbps:.2f} | plain_download_speed_mbps={plain_download_speed_mbps:.2f} | decryption_time_ms={decryption_time_ms:.2f} | decryption_speed_mbps={decryption_speed_mbps:.2f} | file_transfer_speed_mbps={file_transfer_speed_mbps:.2f}'

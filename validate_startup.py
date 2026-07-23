@@ -56,6 +56,7 @@ def validate_startup():
     
     checks_passed = 0
     checks_failed = 0
+    total_checks = 8
 
     loader("Initializing validator")
     pause()
@@ -123,6 +124,9 @@ def validate_startup():
         'dotenv': 'python-dotenv',
         'psycopg2': 'psycopg2-binary',
     }
+
+    if config.config.STORAGE_MODE.lower() == 'cloud':
+        required_packages['azure.storage.blob'] = 'azure-storage-blob'
     
     all_packages_ok = True
     for import_name, package_name in required_packages.items():
@@ -164,11 +168,20 @@ def validate_startup():
             checks_failed += 1
         else:
             db_manager.initialize_schema()
-            if db_manager.table_exists():
-                success("   Table secure_file_users exists")
+            required_tables = [db_manager.USER_TABLE]
+            if config.config.STORAGE_MODE.lower() == 'cloud':
+                required_tables.extend([
+                    db_manager.FILE_TABLE,
+                    db_manager.FILE_ACCESS_TABLE,
+                    db_manager.FILE_EVENTS_TABLE,
+                ])
+
+            missing_tables = [table for table in required_tables if not db_manager.table_exists(table)]
+            if not missing_tables:
+                success(f"   Tables verified: {', '.join(required_tables)}")
                 checks_passed += 1
             else:
-                fail("   Table secure_file_users was not found")
+                fail(f"   Missing tables: {', '.join(missing_tables)}")
                 checks_failed += 1
     except Exception as e:
         fail(f"   Failed to verify database table: {str(e)}")
@@ -177,8 +190,53 @@ def validate_startup():
     print()
     pause()
     
-    # Check 7: Security settings
+    # Check 7: Cloud storage configuration and connectivity
     loader("Preparing check 7")
+    info("Checking cloud storage readiness...")
+
+    if config.config.STORAGE_MODE.lower() != 'cloud':
+        info("   STORAGE_MODE is database (cloud checks skipped)")
+        checks_passed += 1
+    else:
+        cloud_errors = []
+        if config.config.CLOUD_PROVIDER != 'azure':
+            cloud_errors.append("CLOUD_PROVIDER must be azure")
+
+        if not config.config.AZURE_STORAGE_CONTAINER:
+            cloud_errors.append("AZURE_STORAGE_CONTAINER is missing")
+
+        has_auth = any([
+            bool(config.config.AZURE_STORAGE_CONNECTION_STRING),
+            bool(config.config.AZURE_STORAGE_ACCOUNT_NAME and config.config.AZURE_STORAGE_ACCOUNT_KEY),
+            bool(config.config.AZURE_STORAGE_ACCOUNT_NAME and config.config.AZURE_STORAGE_SAS_TOKEN),
+        ])
+        if not has_auth:
+            cloud_errors.append("No valid Azure auth method configured")
+
+        if cloud_errors:
+            for item in cloud_errors:
+                fail(f"   {item}")
+            checks_failed += 1
+        else:
+            try:
+                from app.modules.cloud_storage import get_cloud_storage_client
+                cloud_client = get_cloud_storage_client(config.config)
+                healthy, message = cloud_client.health_check()
+                if healthy:
+                    success(f"   {message}")
+                    checks_passed += 1
+                else:
+                    fail(f"   {message}")
+                    checks_failed += 1
+            except Exception as exc:
+                fail(f"   Cloud startup check failed: {exc}")
+                checks_failed += 1
+
+    print()
+    pause()
+
+    # Check 8: Security settings
+    loader("Preparing check 8")
     info("Checking security settings...")
     security_ok = True
     
@@ -206,8 +264,8 @@ def validate_startup():
     info("="*50)
     info("VALIDATION SUMMARY")
     info("="*50)
-    success(f"Passed: {checks_passed}/7")
-    fail(f"Failed: {checks_failed}/7\n")
+    success(f"Passed: {checks_passed}/{total_checks}")
+    fail(f"Failed: {checks_failed}/{total_checks}\n")
     
     if checks_failed == 0:
         success("All checks passed! Application is ready to start.\n")

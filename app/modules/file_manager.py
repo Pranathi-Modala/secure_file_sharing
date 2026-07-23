@@ -14,7 +14,11 @@ import hashlib
 import time
 from datetime import datetime
 import logging
+import config as cfg
 from modules.logger import system_logger
+from modules.cloud_storage import get_cloud_storage_client, CloudStorageError
+from modules.file_repository import file_repository
+from modules.metrics_repository import metrics_repository
 
 
 class SharedFile:
@@ -149,6 +153,19 @@ class FileManager:
         self.user_files = {}  # {username: [file_ids]}
         self.file_operations = []  # Track operations for logging
         self.logger = logging.getLogger(__name__)
+        self.storage_mode = cfg.config.STORAGE_MODE.lower()
+        self.cloud_provider = cfg.config.CLOUD_PROVIDER
+        self.file_repo = file_repository
+        self.metrics_repo = metrics_repository
+        self.cloud_client = None
+
+        if self.storage_mode == 'cloud':
+            try:
+                self.cloud_client = get_cloud_storage_client(cfg.config)
+                self.logger.info('Cloud storage client initialized for Azure Blob Storage')
+            except CloudStorageError as exc:
+                self.logger.error(f'Cloud storage is enabled but failed to initialize: {exc}')
+
         self.upload_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads')
         self.plain_upload_dir = os.path.join(self.upload_root, 'plain_uploads')
         self.encrypted_upload_dir = os.path.join(self.upload_root, 'encrypted_uploads')
@@ -167,6 +184,11 @@ class FileManager:
         if elapsed_sec <= 0:
             return 0
         return (size_bytes / (1024 * 1024)) / elapsed_sec
+
+    def _build_cloud_object_name(self, owner, file_id, filename):
+        """Build deterministic cloud object key suffix."""
+        safe_filename = self._sanitize_filename(filename)
+        return f"{owner}/{file_id}_{safe_filename}.enc"
 
     def upload_file(self, filename, owner, plain_content, encrypted_content, encryption_key, original_size, encryption_time_ms=None, encrypted_size=None):
         """
@@ -192,18 +214,40 @@ class FileManager:
 
         encrypted_size = encrypted_size if encrypted_size is not None else len(encrypted_content)
         safe_filename = self._sanitize_filename(filename)
-        plain_file_path = os.path.join(self.plain_upload_dir, f"{file_id}_{safe_filename}")
-        encrypted_file_path = os.path.join(self.encrypted_upload_dir, f"{file_id}_{safe_filename}.enc")
+        plain_file_path = None
+        encrypted_file_path = None
+        cloud_object_key = None
+        plain_write_time_ms = 0.0
+        encrypted_write_time_ms = 0.0
 
-        plain_write_start = time.time()
-        with open(plain_file_path, 'wb') as plain_file:
-            plain_file.write(plain_content)
-        plain_write_time_ms = (time.time() - plain_write_start) * 1000
+        if self.storage_mode == 'cloud':
+            if not self.cloud_client:
+                return {
+                    'success': False,
+                    'message': 'Cloud storage client is not available. Check Azure configuration.'
+                }
 
-        encrypted_write_start = time.time()
-        with open(encrypted_file_path, 'wb') as encrypted_file:
-            encrypted_file.write(encrypted_content)
-        encrypted_write_time_ms = (time.time() - encrypted_write_start) * 1000
+            object_name = self._build_cloud_object_name(owner, file_id, safe_filename)
+            encrypted_write_start = time.time()
+            cloud_object_key = self.cloud_client.upload_encrypted_file(
+                file_id=file_id,
+                encrypted_bytes=encrypted_content,
+                object_name=object_name
+            )
+            encrypted_write_time_ms = (time.time() - encrypted_write_start) * 1000
+        else:
+            plain_file_path = os.path.join(self.plain_upload_dir, f"{file_id}_{safe_filename}")
+            encrypted_file_path = os.path.join(self.encrypted_upload_dir, f"{file_id}_{safe_filename}.enc")
+
+            plain_write_start = time.time()
+            with open(plain_file_path, 'wb') as plain_file:
+                plain_file.write(plain_content)
+            plain_write_time_ms = (time.time() - plain_write_start) * 1000
+
+            encrypted_write_start = time.time()
+            with open(encrypted_file_path, 'wb') as encrypted_file:
+                encrypted_file.write(encrypted_content)
+            encrypted_write_time_ms = (time.time() - encrypted_write_start) * 1000
 
         upload_speed_plain_mbps = self._calculate_speed_mbps(original_size, plain_write_time_ms)
         upload_speed_encrypted_mbps = self._calculate_speed_mbps(encrypted_size, encrypted_write_time_ms)
@@ -263,6 +307,34 @@ class FileManager:
             f'File uploaded: {filename} by {owner} | size={original_size} bytes | encrypted_size={encrypted_size} bytes | encryption_time_ms={formatted_encryption_time:.2f} | upload_speed_plain_mbps={upload_metrics["upload_speed_plain_mbps"]:.2f} | upload_speed_encrypted_mbps={upload_metrics["upload_speed_encrypted_mbps"]:.2f}'
         )
 
+        if self.storage_mode == 'cloud':
+            checksum_sha256 = hashlib.sha256(encrypted_content).hexdigest()
+            try:
+                self.file_repo.save_file_metadata(
+                    file_id=file_id,
+                    owner_username=owner,
+                    original_filename=filename,
+                    file_type=os.path.splitext(filename)[1].lstrip('.'),
+                    plain_size_bytes=original_size,
+                    encrypted_size_bytes=encrypted_size,
+                    cloud_object_key=cloud_object_key,
+                    checksum_sha256=checksum_sha256,
+                )
+                self.metrics_repo.log_event(
+                    event_type='upload',
+                    actor_username=owner,
+                    file_id=file_id,
+                    encryption_time_ms=round(encryption_time_ms or 0, 2),
+                    upload_time_ms=round(encrypted_write_time_ms, 2),
+                    upload_speed_mbps=round(upload_speed_encrypted_mbps, 2),
+                    transfer_speed_mbps=round(upload_speed_encrypted_mbps, 2),
+                    event_status='success',
+                    event_message='Encrypted file uploaded to Azure Blob Storage',
+                )
+            except Exception as exc:
+                self.logger.error(f'Failed to persist cloud metadata for {file_id}: {exc}')
+                return {'success': False, 'message': 'File uploaded but failed to persist cloud metadata'}
+
         return {
             'success': True,
             'file_id': file_id,
@@ -296,6 +368,13 @@ class FileManager:
         # Share file
         shared_file.share_with_user(recipient_username, include_key)
 
+        if self.storage_mode == 'cloud':
+            try:
+                self.file_repo.grant_access(file_id, recipient_username, include_key)
+            except Exception as exc:
+                self.logger.error(f'Failed to persist file sharing metadata: {exc}')
+                return {'success': False, 'message': 'Failed to persist sharing metadata'}
+
         share_time_ms = (time.time() - share_start) * 1000 if share_start else None
 
         # Log operation
@@ -315,6 +394,16 @@ class FileManager:
             f'File shared: {shared_file.filename} from {owner} to {recipient_username} | file_size={shared_file.file_size} bytes | share_time_ms={formatted_share_time:.2f} | key_provided={include_key}'
         )
 
+        if self.storage_mode == 'cloud':
+            self.metrics_repo.log_event(
+                event_type='share',
+                actor_username=owner,
+                file_id=file_id,
+                upload_time_ms=round(share_time_ms or 0, 2),
+                event_status='success',
+                event_message=f'Shared with {recipient_username}',
+            )
+
         return {
             'success': True,
             'message': f'File shared with {recipient_username}',
@@ -333,10 +422,63 @@ class FileManager:
         Returns:
             dict: File data if accessible, error message otherwise
         """
-        if file_id not in self.files:
-            return {'success': False, 'message': 'File not found'}
+        shared_file = self.files.get(file_id)
 
-        shared_file = self.files[file_id]
+        if self.storage_mode == 'cloud':
+            if not self.cloud_client:
+                return {'success': False, 'message': 'Cloud storage client is not available'}
+
+            access_result = self.file_repo.can_user_access(file_id, username)
+            if not access_result['can_access']:
+                self.metrics_repo.log_event(
+                    event_type='failed_access',
+                    actor_username=username,
+                    file_id=file_id,
+                    event_status='failed',
+                    event_message='Access denied for file download',
+                )
+                return {'success': False, 'message': 'Access denied'}
+
+            if not access_result['key_provided']:
+                return {
+                    'success': False,
+                    'message': 'File is locked. Owner did not provide decryption key.'
+                }
+
+            metadata = self.file_repo.get_file_metadata(file_id)
+            if not metadata:
+                return {'success': False, 'message': 'File metadata not found'}
+
+            if not shared_file:
+                return {
+                    'success': False,
+                    'message': 'Encryption key is unavailable in memory. Ask owner to re-share this file in current session.'
+                }
+
+            encrypted_read_start = time.time()
+            encrypted_content = self.cloud_client.download_encrypted_file(metadata['cloud_object_key'])
+            encrypted_read_time_ms = (time.time() - encrypted_read_start) * 1000
+            encrypted_download_speed_mbps = self._calculate_speed_mbps(len(encrypted_content), encrypted_read_time_ms)
+
+            shared_file.log_download(username)
+            retrieval_time_ms = (time.time() - download_start) * 1000 if download_start else encrypted_read_time_ms
+
+            return {
+                'success': True,
+                'file': {
+                    **shared_file.to_dict(include_content=True),
+                    'encrypted_content': encrypted_content
+                },
+                'download_metrics': {
+                    'encrypted_read_time_ms': round(encrypted_read_time_ms, 2),
+                    'encrypted_download_speed_mbps': round(encrypted_download_speed_mbps, 2),
+                    'retrieval_time_ms': round(retrieval_time_ms, 2)
+                },
+                'message': 'File retrieved successfully'
+            }
+
+        if not shared_file:
+            return {'success': False, 'message': 'File not found'}
 
         # Check access
         if not shared_file.can_access(username):
@@ -386,6 +528,17 @@ class FileManager:
         Returns:
             list: File metadata list
         """
+        if self.storage_mode == 'cloud':
+            try:
+                files = self.file_repo.list_owned_files(username)
+                for item in files:
+                    memory_file = self.files.get(item['file_id'])
+                    item['shared_with'] = list(memory_file.shared_with.keys()) if memory_file else []
+                return files
+            except Exception as exc:
+                self.logger.error(f'Failed to load owned files from database: {exc}')
+                return []
+
         file_ids = self.user_files.get(username, [])
         files = []
 
@@ -404,6 +557,13 @@ class FileManager:
         Returns:
             list: File metadata list
         """
+        if self.storage_mode == 'cloud':
+            try:
+                return self.file_repo.list_shared_files(username)
+            except Exception as exc:
+                self.logger.error(f'Failed to load shared files from database: {exc}')
+                return []
+
         shared_files = []
 
         for file_id, shared_file in self.files.items():
@@ -423,10 +583,45 @@ class FileManager:
         Returns:
             dict: Deletion result
         """
-        if file_id not in self.files:
-            return {'success': False, 'message': 'File not found'}
+        shared_file = self.files.get(file_id)
 
-        shared_file = self.files[file_id]
+        if self.storage_mode == 'cloud':
+            metadata = self.file_repo.get_file_metadata(file_id)
+            if not metadata:
+                return {'success': False, 'message': 'File not found'}
+            if metadata['owner_username'] != owner:
+                return {'success': False, 'message': 'Permission denied'}
+
+            try:
+                if self.cloud_client:
+                    self.cloud_client.delete_encrypted_file(metadata['cloud_object_key'])
+                self.file_repo.delete_file_metadata(file_id, owner)
+                self.metrics_repo.log_event(
+                    event_type='delete',
+                    actor_username=owner,
+                    file_id=file_id,
+                    event_status='success',
+                    event_message='Deleted from Azure and PostgreSQL metadata',
+                )
+            except Exception as exc:
+                self.logger.error(f'Failed to delete cloud file {file_id}: {exc}')
+                return {'success': False, 'message': 'Failed to delete cloud file'}
+
+            if shared_file:
+                if owner in self.user_files and file_id in self.user_files[owner]:
+                    self.user_files[owner].remove(file_id)
+                del self.files[file_id]
+
+            self._log_operation({
+                'operation': 'delete',
+                'filename': metadata.get('original_filename', ''),
+                'owner': owner,
+                'file_id': file_id
+            })
+            return {'success': True, 'message': 'File deleted successfully'}
+
+        if not shared_file:
+            return {'success': False, 'message': 'File not found'}
 
         # Verify ownership
         if shared_file.owner != owner:
@@ -476,6 +671,8 @@ class FileManager:
             return {'success': False, 'message': 'Permission denied'}
 
         if shared_file.unshare_with_user(recipient):
+            if self.storage_mode == 'cloud':
+                self.file_repo.revoke_access(file_id, recipient)
             return {'success': True, 'message': f'Access revoked from {recipient}'}
 
         return {'success': False, 'message': 'User does not have access to file'}

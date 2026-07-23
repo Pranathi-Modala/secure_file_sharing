@@ -85,6 +85,16 @@ class Config:
 
         # Storage mode
         self.STORAGE_MODE = os.getenv('STORAGE_MODE', 'database')
+        self.CLOUD_PROVIDER = os.getenv('CLOUD_PROVIDER', 'azure').lower()
+        self.CLOUD_OBJECT_PREFIX = os.getenv('CLOUD_OBJECT_PREFIX', 'encrypted/')
+
+        # Azure Blob Storage settings
+        self.AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME', '')
+        self.AZURE_STORAGE_CONTAINER = os.getenv('AZURE_STORAGE_CONTAINER', '')
+        self.AZURE_STORAGE_ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY', '')
+        self.AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING', '')
+        self.AZURE_STORAGE_ENDPOINT_SUFFIX = os.getenv('AZURE_STORAGE_ENDPOINT_SUFFIX', 'core.windows.net')
+        self.AZURE_STORAGE_SAS_TOKEN = os.getenv('AZURE_STORAGE_SAS_TOKEN', '')
 
         # Metrics/research settings
         self.METRICS_ENABLED = os.getenv('METRICS_ENABLED', 'True').lower() in ('true', '1', 'yes')
@@ -143,9 +153,36 @@ class Config:
             errors.append(f'LOG_LEVEL must be one of {valid_levels}, got {self.LOG_LEVEL}')
 
         # Validate storage mode
-        valid_modes = ['database']
+        valid_modes = ['database', 'cloud']
         if self.STORAGE_MODE.lower() not in valid_modes:
             errors.append(f'STORAGE_MODE must be one of {valid_modes}, got {self.STORAGE_MODE}')
+
+        if self.STORAGE_MODE.lower() == 'cloud':
+            valid_providers = ['azure']
+            if self.CLOUD_PROVIDER not in valid_providers:
+                errors.append(
+                    f'CLOUD_PROVIDER must be one of {valid_providers} when STORAGE_MODE=cloud, got {self.CLOUD_PROVIDER}'
+                )
+
+            if not self.AZURE_STORAGE_CONTAINER:
+                errors.append('AZURE_STORAGE_CONTAINER is required when STORAGE_MODE=cloud')
+
+            if not self.AZURE_STORAGE_ACCOUNT_NAME and not self.AZURE_STORAGE_CONNECTION_STRING:
+                errors.append(
+                    'Set AZURE_STORAGE_ACCOUNT_NAME or AZURE_STORAGE_CONNECTION_STRING when STORAGE_MODE=cloud'
+                )
+
+            auth_methods = [
+                bool(self.AZURE_STORAGE_CONNECTION_STRING),
+                bool(self.AZURE_STORAGE_ACCOUNT_NAME and self.AZURE_STORAGE_ACCOUNT_KEY),
+                bool(self.AZURE_STORAGE_ACCOUNT_NAME and self.AZURE_STORAGE_SAS_TOKEN),
+            ]
+            if not any(auth_methods):
+                errors.append(
+                    'Provide one Azure auth method: AZURE_STORAGE_CONNECTION_STRING, '
+                    'or AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_ACCOUNT_KEY, '
+                    'or AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_SAS_TOKEN'
+                )
 
         # Validate DATABASE_URL format
         parsed_url = urlparse(self.DATABASE_URL)
@@ -198,8 +235,13 @@ class Config:
             'encryption_algorithm': self.ENCRYPTION_ALGORITHM,
             'key_rotation_policy': self.KEY_ROTATION_POLICY,
             'storage_mode': self.STORAGE_MODE,
+            'cloud_provider': self.CLOUD_PROVIDER,
+            'cloud_object_prefix': self.CLOUD_OBJECT_PREFIX,
             'database_url': self.DATABASE_URL,
             'metrics_enabled': self.METRICS_ENABLED,
+            'azure_storage_account_name': self.AZURE_STORAGE_ACCOUNT_NAME,
+            'azure_storage_container': self.AZURE_STORAGE_CONTAINER,
+            'azure_storage_endpoint_suffix': self.AZURE_STORAGE_ENDPOINT_SUFFIX,
         }
 
     def __repr__(self):

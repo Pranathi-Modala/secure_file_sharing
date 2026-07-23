@@ -17,6 +17,9 @@ class DatabaseManager:
     """Manages PostgreSQL connectivity and basic user operations."""
 
     USER_TABLE = 'secure_file_users'
+    FILE_TABLE = 'secure_files'
+    FILE_ACCESS_TABLE = 'file_access'
+    FILE_EVENTS_TABLE = 'file_events'
 
     def __init__(self, database_url):
         self.database_url = database_url
@@ -38,19 +41,90 @@ class DatabaseManager:
         );
         """
 
+        create_files_table = f"""
+        CREATE TABLE IF NOT EXISTS {self.FILE_TABLE} (
+            file_id TEXT PRIMARY KEY,
+            owner_username VARCHAR(100) NOT NULL,
+            original_filename TEXT NOT NULL,
+            file_type TEXT,
+            plain_size_bytes BIGINT,
+            encrypted_size_bytes BIGINT,
+            cloud_object_key TEXT UNIQUE,
+            checksum_sha256 TEXT,
+            uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT fk_owner_username
+                FOREIGN KEY(owner_username)
+                REFERENCES {self.USER_TABLE}(username)
+                ON DELETE CASCADE
+        );
+        """
+
+        create_access_table = f"""
+        CREATE TABLE IF NOT EXISTS {self.FILE_ACCESS_TABLE} (
+            access_id SERIAL PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            granted_to VARCHAR(100) NOT NULL,
+            key_provided BOOLEAN NOT NULL DEFAULT TRUE,
+            granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT fk_access_file
+                FOREIGN KEY(file_id)
+                REFERENCES {self.FILE_TABLE}(file_id)
+                ON DELETE CASCADE,
+            CONSTRAINT fk_access_user
+                FOREIGN KEY(granted_to)
+                REFERENCES {self.USER_TABLE}(username)
+                ON DELETE CASCADE,
+            CONSTRAINT uq_file_recipient UNIQUE (file_id, granted_to)
+        );
+        """
+
+        create_events_table = f"""
+        CREATE TABLE IF NOT EXISTS {self.FILE_EVENTS_TABLE} (
+            event_id BIGSERIAL PRIMARY KEY,
+            file_id TEXT,
+            actor_username VARCHAR(100),
+            event_type TEXT NOT NULL,
+            encryption_time_ms NUMERIC,
+            decryption_time_ms NUMERIC,
+            upload_time_ms NUMERIC,
+            download_time_ms NUMERIC,
+            upload_speed_mbps NUMERIC,
+            download_speed_mbps NUMERIC,
+            transfer_speed_mbps NUMERIC,
+            event_status TEXT,
+            event_message TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT fk_event_file
+                FOREIGN KEY(file_id)
+                REFERENCES {self.FILE_TABLE}(file_id)
+                ON DELETE SET NULL,
+            CONSTRAINT fk_event_actor
+                FOREIGN KEY(actor_username)
+                REFERENCES {self.USER_TABLE}(username)
+                ON DELETE SET NULL
+        );
+        """
+
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_users_table)
+                cursor.execute(create_files_table)
+                cursor.execute(create_access_table)
+                cursor.execute(create_events_table)
 
-        self.logger.info(f'✓ Database schema initialized (table: {self.USER_TABLE})')
+        self.logger.info(
+            '✓ Database schema initialized '
+            f'(tables: {self.USER_TABLE}, {self.FILE_TABLE}, {self.FILE_ACCESS_TABLE}, {self.FILE_EVENTS_TABLE})'
+        )
 
-    def table_exists(self):
-        """Check whether the secure_file_users table exists."""
+    def table_exists(self, table_name=None):
+        """Check whether a table exists in PostgreSQL."""
+        target_table = table_name or self.USER_TABLE
         query = "SELECT to_regclass(%s) AS table_name;"
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                    cursor.execute(query, (self.USER_TABLE,))
+                    cursor.execute(query, (target_table,))
                     row = cursor.fetchone()
             return bool(row and row.get('table_name'))
         except psycopg2.Error as exc:

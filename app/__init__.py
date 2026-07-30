@@ -3,7 +3,7 @@
 FLASK APPLICATION CONFIGURATION
 ==============================================
 Main Flask app initialization
-Week 5: Environment Hardening - Loads config from config.py
+
 """
 
 from flask import Flask
@@ -44,10 +44,11 @@ def create_app():
     os.makedirs(app.config['PLAIN_UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(app.config['ENCRYPTED_UPLOAD_FOLDER'], exist_ok=True)
 
-    # Ensure required database tables exist before serving requests.
-    if db_manager is None:
-        raise RuntimeError('Database manager is not configured. Check DATABASE_URL settings.')
-    db_manager.initialize_schema()
+    # Ensure required database tables exist before serving requests in database mode.
+    if config.config.STORAGE_MODE.lower() == 'database':
+        if db_manager is None:
+            raise RuntimeError('Database manager is not configured. Check DATABASE_URL settings.')
+        db_manager.initialize_schema()
 
     # Register blueprints (routes)
     from routes.auth_routes import auth_bp

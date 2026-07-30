@@ -113,7 +113,7 @@ class DatabaseManager:
                 cursor.execute(create_events_table)
 
         self.logger.info(
-            '✓ Database schema initialized '
+            'Database schema initialized '
             f'(tables: {self.USER_TABLE}, {self.FILE_TABLE}, {self.FILE_ACCESS_TABLE}, {self.FILE_EVENTS_TABLE})'
         )
 

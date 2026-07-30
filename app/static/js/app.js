@@ -11,8 +11,11 @@ class SecureFileTransferClient {
     this.currentUser = null;
     this.files = [];
     this.sharedFiles = [];
+    this.isHandlingAuthRedirect = false;
     this.initializeEventListeners();
+    this.showAuthPanel();
     this.checkExistingSession();
+    window.addEventListener("focus", () => this.verifyActiveSession());
   }
 
   // ============ INITIALIZATION ============
@@ -47,11 +50,13 @@ class SecureFileTransferClient {
       ?.addEventListener("click", () => this.loadSharedFiles());
 
     // Sidebar navigation
-    document.querySelectorAll(".sidebar button").forEach((btn) => {
-      btn.addEventListener("click", (e) =>
-        this.switchSection(e.target.dataset.section),
-      );
-    });
+    document
+      .querySelectorAll(".sidebar button[data-section]")
+      .forEach((btn) => {
+        btn.addEventListener("click", (e) =>
+          this.switchSection(e.target.dataset.section),
+        );
+      });
 
     // Modal
     document
@@ -62,15 +67,27 @@ class SecureFileTransferClient {
       ?.addEventListener("click", () => this.confirmShare());
   }
 
-  checkExistingSession() {
+  async checkExistingSession() {
     const saved = localStorage.getItem("sft_session");
-    if (saved) {
+    if (!saved) {
+      this.showAuthPanel();
+      return;
+    }
+
+    try {
       const session = JSON.parse(saved);
       this.sessionId = session.sessionId;
       this.currentUser = session.user;
+
+      const isValid = await this.verifyActiveSession(false);
+      if (!isValid) return;
+
       this.showDashboard();
       this.loadMyFiles();
       this.loadSharedFiles();
+    } catch (error) {
+      console.error("Session restore error:", error);
+      this.redirectToLogin("Please log in to continue.", "warning");
     }
   }
 
@@ -154,6 +171,14 @@ class SecureFileTransferClient {
   }
 
   handleLogout() {
+    if (this.sessionId) {
+      fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: this.sessionId }),
+      }).catch((error) => console.error("Logout API error:", error));
+    }
+
     localStorage.removeItem("sft_session");
     this.sessionId = null;
     this.currentUser = null;
@@ -191,10 +216,11 @@ class SecureFileTransferClient {
     try {
       this.showMessage("Uploading and encrypting file...", "info");
 
-      const response = await fetch("/api/files/upload", {
+      const response = await this.authFetch("/api/files/upload", {
         method: "POST",
         body: formData,
       });
+      if (!response) return;
 
       const data = await response.json();
 
@@ -221,11 +247,12 @@ class SecureFileTransferClient {
 
   async loadMyFiles() {
     try {
-      const response = await fetch("/api/files/my-files", {
+      const response = await this.authFetch("/api/files/my-files", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: this.sessionId }),
       });
+      if (!response) return;
 
       const data = await response.json();
 
@@ -240,11 +267,12 @@ class SecureFileTransferClient {
 
   async loadSharedFiles() {
     try {
-      const response = await fetch("/api/files/shared-with-me", {
+      const response = await this.authFetch("/api/files/shared-with-me", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: this.sessionId }),
       });
+      if (!response) return;
 
       const data = await response.json();
 
@@ -272,11 +300,11 @@ class SecureFileTransferClient {
         (file) => `
       <div class="file-item">
         <div class="file-info">
-          <div class="file-name"> ${file.filename}</div>
+          <div class="file-name"> ${this.getDisplayFileName(file)}</div>
           <div class="file-meta">
-            Size: ${this.formatFileSize(file.file_size)} | 
-            Uploaded: ${new Date(file.upload_timestamp).toLocaleDateString()} |
-            Shared with: ${file.shared_with.length}
+            Size: ${this.formatFileSize(this.getFileSizeBytes(file))} |
+            Uploaded: ${this.formatDate(file.upload_timestamp || file.uploaded_at)} |
+            Shared with: ${this.getSharedCount(file)}
           </div>
         </div>
         <div class="file-actions">
@@ -304,11 +332,11 @@ class SecureFileTransferClient {
         (file) => `
       <div class="file-item">
         <div class="file-info">
-          <div class="file-name"> ${file.filename}</div>
+          <div class="file-name"> ${this.getDisplayFileName(file)}</div>
           <div class="file-meta">
-            Size: ${this.formatFileSize(file.file_size)} | 
-            Owner: ${file.owner} |
-            ID: ${file.file_id.substring(0, 8)}...
+            Size: ${this.formatFileSize(this.getFileSizeBytes(file))} |
+            Owner: ${file.owner || file.owner_username || "Unknown"} |
+            ID: ${(file.file_id || "").substring(0, 8) || "N/A"}...
           </div>
         </div>
         <div class="file-actions">
@@ -324,11 +352,12 @@ class SecureFileTransferClient {
     if (!confirm("Delete this file?")) return;
 
     try {
-      const response = await fetch(`/api/files/delete/${fileId}`, {
+      const response = await this.authFetch(`/api/files/delete/${fileId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: this.sessionId }),
       });
+      if (!response) return;
 
       const data = await response.json();
 
@@ -366,7 +395,7 @@ class SecureFileTransferClient {
     }
 
     try {
-      const response = await fetch("/api/files/share", {
+      const response = await this.authFetch("/api/files/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -376,6 +405,7 @@ class SecureFileTransferClient {
           include_key: includeKey,
         }),
       });
+      if (!response) return;
 
       const data = await response.json();
 
@@ -405,7 +435,7 @@ class SecureFileTransferClient {
     try {
       this.showMessage("Downloading and decrypting...", "info");
 
-      const response = await fetch(`/api/files/download/${fileId}`, {
+      const response = await this.authFetch(`/api/files/download/${fileId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -413,6 +443,7 @@ class SecureFileTransferClient {
           encryption_key: key,
         }),
       });
+      if (!response) return;
 
       if (response.ok) {
         const blob = await response.blob();
@@ -464,20 +495,98 @@ class SecureFileTransferClient {
     document.getElementById("auth-container").style.display = "flex";
     document.getElementById("dashboard").style.display = "none";
     document.getElementById("user-status").textContent = "Not logged in";
+
+    const loginBox = document.querySelector('[data-form="login"]');
+    const registerBox = document.querySelector('[data-form="register"]');
+    if (loginBox && registerBox) {
+      loginBox.style.display = "block";
+      registerBox.style.display = "none";
+    }
   }
 
   showDashboard() {
     document.getElementById("auth-container").style.display = "none";
     document.getElementById("dashboard").style.display = "grid";
-    document.getElementById("user-status").innerHTML = `
-      <span>${this.currentUser.username}</span>
-      <button class="btn-secondary" id="btn-logout" style="width: auto;">Logout</button>
-    `;
-    document
-      .getElementById("btn-logout")
-      .addEventListener("click", () => this.handleLogout());
+    document.getElementById("user-status").textContent =
+      `Logged in as ${this.currentUser.username}`;
     this.switchSection("upload");
     this.loadSystemStats();
+  }
+
+  async verifyActiveSession(showWarningOnExpire = true) {
+    if (!this.sessionId) return false;
+
+    try {
+      const response = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: this.sessionId }),
+      });
+
+      if (!response.ok) {
+        let message = "Session expired. Please log in again.";
+        try {
+          const data = await response.json();
+          message = data.message || message;
+        } catch (error) {
+          console.error("Session verify parse error:", error);
+        }
+        this.redirectToLogin(message, showWarningOnExpire ? "warning" : "info");
+        return false;
+      }
+
+      const data = await response.json();
+      if (!data.success) {
+        this.redirectToLogin(
+          data.message || "Session expired. Please log in again.",
+          showWarningOnExpire ? "warning" : "info",
+        );
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Session verify error:", error);
+      return false;
+    }
+  }
+
+  async authFetch(url, options = {}) {
+    if (!this.sessionId || !this.currentUser) {
+      this.redirectToLogin("Please log in to continue.", "warning");
+      return null;
+    }
+
+    const response = await fetch(url, options);
+    if (response.status === 401) {
+      let message = "Session expired. Please log in again.";
+      try {
+        const data = await response.json();
+        message = data.message || message;
+      } catch (error) {
+        console.error("Auth failure parse error:", error);
+      }
+      this.redirectToLogin(message, "warning");
+      return null;
+    }
+
+    return response;
+  }
+
+  redirectToLogin(message = "", type = "warning") {
+    if (this.isHandlingAuthRedirect) return;
+
+    this.isHandlingAuthRedirect = true;
+    localStorage.removeItem("sft_session");
+    this.sessionId = null;
+    this.currentUser = null;
+    this.showAuthPanel();
+
+    if (message) {
+      this.showMessage(message, type);
+    }
+
+    this.isHandlingAuthRedirect = false;
   }
 
   switchSection(sectionName) {
@@ -599,11 +708,52 @@ class SecureFileTransferClient {
   }
 
   formatFileSize(bytes) {
-    if (bytes === 0) return "0 Bytes";
+    const numericBytes = Number(bytes);
+    if (!Number.isFinite(numericBytes) || numericBytes <= 0) return "0 Bytes";
     const k = 1024;
     const sizes = ["Bytes", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
+    const i = Math.min(
+      Math.floor(Math.log(numericBytes) / Math.log(k)),
+      sizes.length - 1,
+    );
+    return (numericBytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
+  }
+
+  formatDate(dateInput) {
+    if (!dateInput) return "N/A";
+
+    const parsed = new Date(dateInput);
+    if (Number.isNaN(parsed.getTime())) return "N/A";
+    return parsed.toLocaleDateString();
+  }
+
+  getDisplayFileName(file) {
+    return file.filename || file.original_filename || "Unnamed file";
+  }
+
+  getFileSizeBytes(file) {
+    const candidates = [
+      file.file_size,
+      file.plain_size_bytes,
+      file.encrypted_size,
+      file.encrypted_size_bytes,
+    ];
+
+    for (const value of candidates) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric >= 0) {
+        return numeric;
+      }
+    }
+
+    return 0;
+  }
+
+  getSharedCount(file) {
+    if (Array.isArray(file.shared_with)) {
+      return file.shared_with.length;
+    }
+    return Number(file.shared_count) || 0;
   }
 }
 

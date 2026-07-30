@@ -2,11 +2,13 @@
 Repository for secure file metadata and access records.
 """
 
+import config as cfg
 from datetime import datetime
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from modules.cloud_data_repository import cloud_data_error, cloud_file_repository
 from modules.database import db_manager
 
 
@@ -15,6 +17,12 @@ class FileRepository:
 
     def __init__(self, database_manager=None):
         self.db = database_manager or db_manager
+        self.storage_mode = cfg.config.STORAGE_MODE.lower()
+        self.cloud_repo = cloud_file_repository
+
+        if self.storage_mode == 'cloud' and not self.cloud_repo:
+            error = cloud_data_error or 'Cloud file repository is unavailable'
+            raise RuntimeError(error)
 
     def _normalize_row(self, row):
         if not row:
@@ -36,6 +44,18 @@ class FileRepository:
         cloud_object_key,
         checksum_sha256,
     ):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.save_file_metadata(
+                file_id=file_id,
+                owner_username=owner_username,
+                original_filename=original_filename,
+                file_type=file_type,
+                plain_size_bytes=plain_size_bytes,
+                encrypted_size_bytes=encrypted_size_bytes,
+                cloud_object_key=cloud_object_key,
+                checksum_sha256=checksum_sha256,
+            )
+
         query = f"""
         INSERT INTO {self.db.FILE_TABLE}
         (
@@ -70,6 +90,9 @@ class FileRepository:
                 return self._normalize_row(cursor.fetchone())
 
     def get_file_metadata(self, file_id):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.get_file_metadata(file_id)
+
         query = f"SELECT * FROM {self.db.FILE_TABLE} WHERE file_id = %s;"
         with self.db.get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -77,6 +100,9 @@ class FileRepository:
                 return self._normalize_row(cursor.fetchone())
 
     def list_owned_files(self, owner_username):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.list_owned_files(owner_username)
+
         query = f"""
         SELECT *
         FROM {self.db.FILE_TABLE}
@@ -89,7 +115,25 @@ class FileRepository:
                 rows = cursor.fetchall()
                 return [self._normalize_row(row) for row in rows]
 
+    def list_all_files(self):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.list_all_files()
+
+        query = f"""
+        SELECT *
+        FROM {self.db.FILE_TABLE}
+        ORDER BY uploaded_at DESC;
+        """
+        with self.db.get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                return [self._normalize_row(row) for row in rows]
+
     def list_shared_files(self, username):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.list_shared_files(username)
+
         query = f"""
         SELECT f.*, a.key_provided, a.granted_at
         FROM {self.db.FILE_TABLE} f
@@ -103,7 +147,38 @@ class FileRepository:
                 rows = cursor.fetchall()
                 return [self._normalize_row(row) for row in rows]
 
+    def list_access_records(self, file_id=None, granted_to=None):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.list_access_records(file_id=file_id, granted_to=granted_to)
+
+        conditions = []
+        values = []
+
+        if file_id is not None:
+            conditions.append("file_id = %s")
+            values.append(file_id)
+
+        if granted_to is not None:
+            conditions.append("granted_to = %s")
+            values.append(granted_to)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"""
+        SELECT file_id, granted_to, key_provided, granted_at
+        FROM {self.db.FILE_ACCESS_TABLE}
+        {where_clause}
+        ORDER BY granted_at DESC;
+        """
+        with self.db.get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query, tuple(values))
+                rows = cursor.fetchall()
+                return [self._normalize_row(row) for row in rows]
+
     def grant_access(self, file_id, granted_to, key_provided=True):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.grant_access(file_id, granted_to, key_provided)
+
         query = f"""
         INSERT INTO {self.db.FILE_ACCESS_TABLE} (file_id, granted_to, key_provided)
         VALUES (%s, %s, %s)
@@ -117,6 +192,9 @@ class FileRepository:
                 return self._normalize_row(cursor.fetchone())
 
     def revoke_access(self, file_id, granted_to):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.revoke_access(file_id, granted_to)
+
         query = f"""
         DELETE FROM {self.db.FILE_ACCESS_TABLE}
         WHERE file_id = %s AND granted_to = %s;
@@ -127,6 +205,9 @@ class FileRepository:
                 return cursor.rowcount > 0
 
     def can_user_access(self, file_id, username):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.can_user_access(file_id, username)
+
         query = f"""
         SELECT
             EXISTS (
@@ -163,6 +244,9 @@ class FileRepository:
         }
 
     def delete_file_metadata(self, file_id, owner_username):
+        if self.storage_mode == 'cloud':
+            return self.cloud_repo.delete_file_metadata(file_id, owner_username)
+
         query = f"""
         DELETE FROM {self.db.FILE_TABLE}
         WHERE file_id = %s AND owner_username = %s;

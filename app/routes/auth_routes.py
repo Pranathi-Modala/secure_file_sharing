@@ -44,7 +44,7 @@ def register():
         )
 
         if result['success']:
-            system_logger.info(f'✓ New user registered: {data["username"]}')
+            system_logger.info(f'User registered: {data["username"]}')
             return jsonify(result), 201
         else:
             return jsonify(result), 400
@@ -80,7 +80,7 @@ def login():
         )
 
         if result['success']:
-            system_logger.info(f'✓ User logged in: {data["username"]}')
+            system_logger.info(f'User logged in: {data["username"]}')
             return jsonify(result), 200
         else:
             return jsonify(result), 401
@@ -110,7 +110,7 @@ def logout():
         result = auth_manager.logout(data['session_id'])
 
         if result['success']:
-            system_logger.info('✓ User logged out')
+            system_logger.info('User logged out')
             return jsonify(result), 200
         else:
             return jsonify(result), 400

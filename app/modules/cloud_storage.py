@@ -30,6 +30,22 @@ class CloudStorageClient(ABC):
     def health_check(self):
         """Validate connectivity and permissions."""
 
+    @abstractmethod
+    def upload_text_object(self, object_name, text_payload):
+        """Upload UTF-8 text and return cloud object key."""
+
+    @abstractmethod
+    def download_text_object(self, object_key):
+        """Download UTF-8 text by cloud object key."""
+
+    @abstractmethod
+    def delete_object(self, object_key):
+        """Delete any object by cloud object key."""
+
+    @abstractmethod
+    def list_object_keys(self, prefix):
+        """List object keys by prefix."""
+
 
 class AzureBlobStorageClient(CloudStorageClient):
     """Azure Blob Storage client for encrypted file objects."""
@@ -40,11 +56,15 @@ class AzureBlobStorageClient(CloudStorageClient):
         self.object_prefix = (self.config.CLOUD_OBJECT_PREFIX or "encrypted/").strip("/")
 
         try:
-            from azure.storage.blob import BlobServiceClient
+            from azure.storage.blob import BlobServiceClient, ContentSettings
+            from azure.core.exceptions import ResourceNotFoundError
         except ImportError as exc:
             raise CloudStorageError(
                 "azure-storage-blob is not installed. Install from requirements.txt"
             ) from exc
+
+        self._content_settings_cls = ContentSettings
+        self._resource_not_found_error = ResourceNotFoundError
 
         self._blob_service_client = self._build_blob_service_client(BlobServiceClient)
         self._container_client = self._blob_service_client.get_container_client(self.container_name)
@@ -73,6 +93,16 @@ class AzureBlobStorageClient(CloudStorageClient):
             return clean_name
         return f"{self.object_prefix}/{clean_name}".replace("//", "/")
 
+    def _resolve_object_key(self, object_key):
+        clean_key = object_key.lstrip('/')
+        if not self.object_prefix:
+            return clean_key
+
+        prefixed = f"{self.object_prefix}/"
+        if clean_key.startswith(prefixed):
+            return clean_key
+        return self._normalize_object_key(clean_key)
+
     def upload_encrypted_file(self, file_id, encrypted_bytes, object_name):
         object_key = self._normalize_object_key(object_name)
         blob_client = self._container_client.get_blob_client(object_key)
@@ -88,6 +118,35 @@ class AzureBlobStorageClient(CloudStorageClient):
         blob_client = self._container_client.get_blob_client(object_key)
         blob_client.delete_blob(delete_snapshots="include")
         return True
+
+    def upload_text_object(self, object_name, text_payload):
+        object_key = self._normalize_object_key(object_name)
+        blob_client = self._container_client.get_blob_client(object_key)
+        content_settings = self._content_settings_cls(content_type='application/json; charset=utf-8')
+        blob_client.upload_blob(text_payload.encode('utf-8'), overwrite=True, content_settings=content_settings)
+        return object_key
+
+    def download_text_object(self, object_key):
+        try:
+            resolved_key = self._resolve_object_key(object_key)
+            blob_client = self._container_client.get_blob_client(resolved_key)
+            stream = blob_client.download_blob()
+            return stream.readall().decode('utf-8')
+        except self._resource_not_found_error:
+            return None
+
+    def delete_object(self, object_key):
+        try:
+            resolved_key = self._resolve_object_key(object_key)
+            blob_client = self._container_client.get_blob_client(resolved_key)
+            blob_client.delete_blob(delete_snapshots='include')
+            return True
+        except self._resource_not_found_error:
+            return False
+
+    def list_object_keys(self, prefix):
+        normalized_prefix = self._normalize_object_key(prefix)
+        return [blob.name for blob in self._container_client.list_blobs(name_starts_with=normalized_prefix)]
 
     def health_check(self):
         try:

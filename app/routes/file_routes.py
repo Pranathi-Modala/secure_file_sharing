@@ -173,7 +173,7 @@ def share_file():
 
     except Exception as e:
         logger.error(f'Share error: {str(e)}')
-        system_logger.error(f'✗ Share error: {str(e)}')
+        system_logger.error(f'Share error: {str(e)}')
         return jsonify({'success': False, 'message': 'Share failed'}), 500
 
 
@@ -214,7 +214,7 @@ def download_file(file_id):
         # Verify encryption key
         if encryption_key != shared_file['encryption_key']:
             system_logger.warning(
-                f'⚠ Incorrect encryption key used to download {file_id} by {username}'
+                f'Incorrect encryption key used to download {file_id} by {username}'
             )
             if config.config.STORAGE_MODE.lower() == 'cloud':
                 metrics_repository.log_event(
@@ -312,7 +312,7 @@ def download_file(file_id):
 
     except Exception as e:
         logger.error(f'Download error: {str(e)}')
-        system_logger.error(f'✗ Download error: {str(e)}')
+        system_logger.error(f'Download error: {str(e)}')
         return jsonify({'success': False, 'message': 'Download failed'}), 500
 
 

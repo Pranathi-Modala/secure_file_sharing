@@ -15,6 +15,8 @@ import os
 from datetime import datetime
 import logging
 
+import config as cfg
+from modules.cloud_data_repository import cloud_data_error, cloud_user_repository
 from modules.database import db_manager
 
 
@@ -29,6 +31,13 @@ class AuthenticationManager:
         Initialize authentication manager
         """
         self.db = database_manager
+        self.storage_mode = cfg.config.STORAGE_MODE.lower()
+        self.user_repo = cloud_user_repository if self.storage_mode == 'cloud' else self.db
+
+        if self.storage_mode == 'cloud' and not self.user_repo:
+            error = cloud_data_error or 'Cloud user repository is unavailable'
+            raise RuntimeError(error)
+
         self.login_attempts = {}  # Track failed attempts
         self.active_sessions = {}  # {session_id: {username, login_time}}
         self.auth_logs = []  # Authentication event logs
@@ -72,18 +81,19 @@ class AuthenticationManager:
             dict: Result with success status
         """
         if not self.db:
-            return {'success': False, 'message': 'Database is not configured'}
+            if self.storage_mode != 'cloud':
+                return {'success': False, 'message': 'Database is not configured'}
 
         password_hash, salt = self.hash_password(password)
         stored_password_hash = f"{password_hash.hex()}:{salt.hex()}"
-        result = self.db.create_user(
+        result = self.user_repo.create_user(
             username=username,
             password_hash=stored_password_hash,
             email=email
         )
 
         if result['success']:
-            self.logger.info(f'✓ User created: {username}')
+            self.logger.info(f'User created: {username}')
 
         return result
 
@@ -165,7 +175,7 @@ class AuthenticationManager:
 
         return {
             'success': True,
-            'message': f'✓ Welcome {username}!',
+            'message': f'Welcome {username}!',
             'session_id': session_id,
             'user': {
                 'user_id': user['user_id'],
@@ -190,7 +200,7 @@ class AuthenticationManager:
             username = self.active_sessions[session_id]['username']
             del self.active_sessions[session_id]
             self._log_auth_event(username, True, 'Logout')
-            return {'success': True, 'message': '✓ Logged out successfully'}
+            return {'success': True, 'message': 'Logged out successfully'}
 
         return {'success': False, 'message': 'Invalid session'}
 
@@ -218,10 +228,10 @@ class AuthenticationManager:
         Returns:
             User object or None
         """
-        if not self.db:
+        if self.storage_mode != 'cloud' and not self.db:
             return None
 
-        return self.db.get_user_by_username(username)
+        return self.user_repo.get_user_by_username(username)
 
     def get_all_users(self):
         """
@@ -230,10 +240,10 @@ class AuthenticationManager:
         Returns:
             list: List of user dictionaries
         """
-        if not self.db:
+        if self.storage_mode != 'cloud' and not self.db:
             return []
 
-        users = self.db.get_all_users()
+        users = self.user_repo.get_all_users()
         return [
             {
                 'user_id': user['user_id'],
@@ -252,7 +262,7 @@ class AuthenticationManager:
         self.login_attempts[username] += 1
 
         if self.login_attempts[username] >= 3:
-            self.logger.warning(f'⚠ Multiple failed attempts for {username}')
+            self.logger.warning(f'Multiple failed attempts for {username}')
 
     def _log_auth_event(self, username, success, message, execution_time=0):
         """

@@ -122,8 +122,10 @@ def validate_startup():
         'flask': 'Flask',
         'cryptography': 'cryptography',
         'dotenv': 'python-dotenv',
-        'psycopg2': 'psycopg2-binary',
     }
+
+    if config.config.STORAGE_MODE.lower() == 'database':
+        required_packages['psycopg2'] = 'psycopg2-binary'
 
     if config.config.STORAGE_MODE.lower() == 'cloud':
         required_packages['azure.storage.blob'] = 'azure-storage-blob'
@@ -145,47 +147,109 @@ def validate_startup():
         checks_failed += 1
     pause()
     
-    # Check 5: Database configuration
+    # Check 5: Storage backend configuration
     loader("Preparing check 5")
-    info("Checking database configuration...")
-    if config.config.DATABASE_URL and config.config.DATABASE_URL.startswith('postgresql://'):
-        success("   DATABASE_URL is configured for PostgreSQL")
-        checks_passed += 1
+    info("Checking storage backend configuration...")
+    if config.config.STORAGE_MODE.lower() == 'database':
+        if config.config.DATABASE_URL and config.config.DATABASE_URL.startswith('postgresql://'):
+            success("   DATABASE_URL is configured for PostgreSQL")
+            checks_passed += 1
+        else:
+            fail("   DATABASE_URL is missing or invalid")
+            checks_failed += 1
     else:
-        fail("   DATABASE_URL is missing or invalid")
-        checks_failed += 1
+        success("   Cloud mode selected (database URL check not required)")
+        checks_passed += 1
     print()
     pause()
 
-    # Check 6: Database table initialization
+    # Check 6: Data-store readiness
     loader("Preparing check 6")
-    info("Checking database table setup...")
-    try:
-        from app.modules.database import db_manager
+    info("Checking data-store readiness...")
+    if config.config.STORAGE_MODE.lower() == 'database':
+        try:
+            from app.modules.database import db_manager
 
-        if db_manager is None:
-            fail("   Database manager is not configured")
-            checks_failed += 1
-        else:
-            db_manager.initialize_schema()
-            required_tables = [db_manager.USER_TABLE]
-            if config.config.STORAGE_MODE.lower() == 'cloud':
-                required_tables.extend([
+            if db_manager is None:
+                fail("   Database manager is not configured")
+                checks_failed += 1
+            else:
+                db_manager.initialize_schema()
+                required_tables = [
+                    db_manager.USER_TABLE,
                     db_manager.FILE_TABLE,
                     db_manager.FILE_ACCESS_TABLE,
                     db_manager.FILE_EVENTS_TABLE,
-                ])
+                ]
 
-            missing_tables = [table for table in required_tables if not db_manager.table_exists(table)]
-            if not missing_tables:
-                success(f"   Tables verified: {', '.join(required_tables)}")
-                checks_passed += 1
-            else:
-                fail(f"   Missing tables: {', '.join(missing_tables)}")
+                missing_tables = [table for table in required_tables if not db_manager.table_exists(table)]
+                if not missing_tables:
+                    success(f"   Tables verified: {', '.join(required_tables)}")
+                    checks_passed += 1
+                else:
+                    fail(f"   Missing tables: {', '.join(missing_tables)}")
+                    checks_failed += 1
+        except Exception as e:
+            fail(f"   Failed to verify database table: {str(e)}")
+            checks_failed += 1
+    else:
+        try:
+            from app.modules.cloud_data_repository import (
+                cloud_data_error,
+                cloud_file_repository,
+                cloud_metrics_repository,
+                cloud_user_repository,
+            )
+
+            if cloud_data_error:
+                fail(f"   Cloud data repository initialization failed: {cloud_data_error}")
                 checks_failed += 1
-    except Exception as e:
-        fail(f"   Failed to verify database table: {str(e)}")
-        checks_failed += 1
+            else:
+                probe_username = '__startup_probe_user__'
+                probe_file_id = '__startup_probe_file__'
+
+                created = cloud_user_repository.create_user(
+                    username=probe_username,
+                    password_hash='probe_hash:probe_salt',
+                    email='startup-probe@example.invalid',
+                )
+
+                user_ok = created.get('success') or cloud_user_repository.get_user_by_username(probe_username) is not None
+
+                file_ok = cloud_file_repository.save_file_metadata(
+                    file_id=probe_file_id,
+                    owner_username=probe_username,
+                    original_filename='probe.txt',
+                    file_type='txt',
+                    plain_size_bytes=4,
+                    encrypted_size_bytes=8,
+                    cloud_object_key='probe/object.enc',
+                    checksum_sha256='probe',
+                ) is not None
+
+                access_ok = cloud_file_repository.grant_access(probe_file_id, probe_username, True) is not None
+                event_ok = cloud_metrics_repository.log_event(
+                    event_type='startup_probe',
+                    actor_username=probe_username,
+                    file_id=probe_file_id,
+                    event_status='success',
+                    event_message='startup validation probe',
+                ) is not None
+
+                # Cleanup probe records so startup checks remain idempotent.
+                cloud_file_repository.revoke_access(probe_file_id, probe_username)
+                cloud_file_repository.delete_file_metadata(probe_file_id, probe_username)
+                cloud_user_repository.delete_user(probe_username)
+
+                if user_ok and file_ok and access_ok and event_ok:
+                    success("   Cloud JSON repositories are readable and writable (users/files/access/events)")
+                    checks_passed += 1
+                else:
+                    fail("   Cloud JSON repository probe failed")
+                    checks_failed += 1
+        except Exception as e:
+            fail(f"   Failed to verify cloud data repositories: {str(e)}")
+            checks_failed += 1
 
     print()
     pause()

@@ -531,9 +531,22 @@ class FileManager:
         if self.storage_mode == 'cloud':
             try:
                 files = self.file_repo.list_owned_files(username)
+
+                access_by_file = {}
+                for access in self.file_repo.list_access_records():
+                    file_id = access.get('file_id')
+                    granted_to = access.get('granted_to')
+                    if not file_id or not granted_to:
+                        continue
+                    access_by_file.setdefault(file_id, []).append(granted_to)
+
                 for item in files:
-                    memory_file = self.files.get(item['file_id'])
-                    item['shared_with'] = list(memory_file.shared_with.keys()) if memory_file else []
+                    file_id = item.get('file_id')
+                    item['shared_with'] = access_by_file.get(file_id, [])
+                    item['filename'] = item.get('original_filename') or item.get('filename')
+                    item['file_size'] = item.get('plain_size_bytes', item.get('file_size', 0))
+                    item['upload_timestamp'] = item.get('uploaded_at', item.get('upload_timestamp'))
+                    item['owner'] = item.get('owner_username', item.get('owner'))
                 return files
             except Exception as exc:
                 self.logger.error(f'Failed to load owned files from database: {exc}')
@@ -559,7 +572,14 @@ class FileManager:
         """
         if self.storage_mode == 'cloud':
             try:
-                return self.file_repo.list_shared_files(username)
+                shared_files = self.file_repo.list_shared_files(username)
+                for item in shared_files:
+                    item['filename'] = item.get('original_filename') or item.get('filename')
+                    item['file_size'] = item.get('plain_size_bytes', item.get('file_size', 0))
+                    item['upload_timestamp'] = item.get('uploaded_at', item.get('upload_timestamp'))
+                    item['owner'] = item.get('owner_username', item.get('owner'))
+                    item['shared_with'] = []
+                return shared_files
             except Exception as exc:
                 self.logger.error(f'Failed to load shared files from database: {exc}')
                 return []
@@ -747,6 +767,89 @@ class FileManager:
         Returns:
             dict: Statistics
         """
+        if self.storage_mode == 'cloud':
+            try:
+                files = self.file_repo.list_all_files()
+                access_records = self.file_repo.list_access_records()
+                events = self.metrics_repo.list_events()
+
+                def _as_float(value):
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return 0.0
+
+                def _mean(values):
+                    values = [v for v in values if v is not None]
+                    return (sum(values) / len(values)) if values else 0
+
+                total_files = len(files)
+                total_uploaded_size = sum(int(item.get('plain_size_bytes') or 0) for item in files)
+                total_encrypted_size = sum(int(item.get('encrypted_size_bytes') or 0) for item in files)
+
+                shared_file_ids = {
+                    record.get('file_id')
+                    for record in access_records
+                    if record.get('file_id')
+                }
+
+                upload_events = [e for e in events if e.get('event_type') == 'upload']
+                download_events = [e for e in events if e.get('event_type') == 'download']
+                encryption_events = [e for e in events if e.get('event_type') == 'encryption']
+                decryption_events = [e for e in events if e.get('event_type') == 'decryption']
+                share_events = [e for e in events if e.get('event_type') == 'share']
+
+                total_uploads = len(upload_events) if upload_events else total_files
+                download_count = len(download_events)
+                decryption_count = len(decryption_events)
+
+                average_upload_size = (total_uploaded_size / total_uploads) if total_uploads else 0
+                average_upload_speed_plain = _mean([_as_float(e.get('upload_speed_mbps')) for e in upload_events])
+                average_upload_speed_encrypted = average_upload_speed_plain
+                average_download_speed_plain = _mean([_as_float(e.get('download_speed_mbps')) for e in download_events])
+                average_download_speed_encrypted = average_download_speed_plain
+                average_transfer_speed = _mean([_as_float(e.get('transfer_speed_mbps')) for e in download_events])
+                average_encryption_time = _mean([_as_float(e.get('encryption_time_ms')) for e in encryption_events])
+                average_encryption_speed = _mean([_as_float(e.get('upload_speed_mbps')) for e in encryption_events])
+                average_download_time = _mean([_as_float(e.get('download_time_ms')) for e in download_events])
+                total_decryption_time = sum(_as_float(e.get('decryption_time_ms')) for e in decryption_events)
+                average_decryption_time = (total_decryption_time / decryption_count) if decryption_count else 0
+                average_decryption_speed = _mean([_as_float(e.get('download_speed_mbps')) for e in decryption_events])
+
+                size_overheads = []
+                for item in files:
+                    plain = _as_float(item.get('plain_size_bytes'))
+                    encrypted = _as_float(item.get('encrypted_size_bytes'))
+                    if plain > 0:
+                        size_overheads.append(((encrypted - plain) / plain) * 100)
+                average_size_overhead = _mean(size_overheads)
+
+                return {
+                    'total_files': total_files,
+                    'total_downloads': download_count,
+                    'files_with_sharing': len(shared_file_ids),
+                    'total_uploads': total_uploads,
+                    'total_shares': len(share_events) if share_events else len(access_records),
+                    'average_upload_size_bytes': round(average_upload_size, 2),
+                    'total_uploaded_size_bytes': total_uploaded_size,
+                    'total_encrypted_size_bytes': total_encrypted_size,
+                    'average_upload_speed_plain_mbps': round(average_upload_speed_plain, 2),
+                    'average_upload_speed_encrypted_mbps': round(average_upload_speed_encrypted, 2),
+                    'average_download_speed_plain_mbps': round(average_download_speed_plain, 2),
+                    'average_download_speed_encrypted_mbps': round(average_download_speed_encrypted, 2),
+                    'average_file_transfer_speed_mbps': round(average_transfer_speed, 2),
+                    'average_encryption_time_ms': round(average_encryption_time, 2),
+                    'average_encryption_speed_mbps': round(average_encryption_speed, 2),
+                    'average_download_time_ms': round(average_download_time, 2),
+                    'total_decryption_time_ms': round(total_decryption_time, 2),
+                    'average_decryption_time_ms': round(average_decryption_time, 2),
+                    'average_decryption_speed_mbps': round(average_decryption_speed, 2),
+                    'average_size_overhead_percent': round(average_size_overhead, 2),
+                    'recent_operations': events[:5],
+                }
+            except Exception as exc:
+                self.logger.error(f'Failed to build cloud file statistics: {exc}')
+
         total_downloads = sum(len(f.download_log) for f in self.files.values())
 
         total_uploaded_size = sum(f.file_size for f in self.files.values())

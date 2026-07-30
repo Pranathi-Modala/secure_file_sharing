@@ -87,6 +87,7 @@ class Config:
         self.STORAGE_MODE = os.getenv('STORAGE_MODE', 'database')
         self.CLOUD_PROVIDER = os.getenv('CLOUD_PROVIDER', 'azure').lower()
         self.CLOUD_OBJECT_PREFIX = os.getenv('CLOUD_OBJECT_PREFIX', 'encrypted/')
+        self.CLOUD_DATA_PREFIX = os.getenv('CLOUD_DATA_PREFIX', 'app-data/')
 
         # Azure Blob Storage settings
         self.AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME', '')
@@ -184,14 +185,15 @@ class Config:
                     'or AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_SAS_TOKEN'
                 )
 
-        # Validate DATABASE_URL format
-        parsed_url = urlparse(self.DATABASE_URL)
-        if parsed_url.scheme not in ['postgresql', 'postgresql+psycopg2']:
-            errors.append('DATABASE_URL must use postgresql scheme')
-        if not parsed_url.hostname:
-            errors.append('DATABASE_URL must include a host')
-        if not parsed_url.path or parsed_url.path == '/':
-            errors.append('DATABASE_URL must include a database name')
+        # Validate DATABASE_URL format only when database mode is enabled.
+        if self.STORAGE_MODE.lower() == 'database':
+            parsed_url = urlparse(self.DATABASE_URL)
+            if parsed_url.scheme not in ['postgresql', 'postgresql+psycopg2']:
+                errors.append('DATABASE_URL must use postgresql scheme')
+            if not parsed_url.hostname:
+                errors.append('DATABASE_URL must include a host')
+            if not parsed_url.path or parsed_url.path == '/':
+                errors.append('DATABASE_URL must include a database name')
 
         # Create required directories
         try:
@@ -237,6 +239,7 @@ class Config:
             'storage_mode': self.STORAGE_MODE,
             'cloud_provider': self.CLOUD_PROVIDER,
             'cloud_object_prefix': self.CLOUD_OBJECT_PREFIX,
+            'cloud_data_prefix': self.CLOUD_DATA_PREFIX,
             'database_url': self.DATABASE_URL,
             'metrics_enabled': self.METRICS_ENABLED,
             'azure_storage_account_name': self.AZURE_STORAGE_ACCOUNT_NAME,

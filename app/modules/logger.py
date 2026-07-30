@@ -10,6 +10,8 @@ Week 5: Environment Hardening - Uses configured log folder
 import logging
 import os
 import csv
+import io
+import sys
 from datetime import datetime
 
 
@@ -55,6 +57,11 @@ class SystemLogger:
         # Create logger
         self.logger = logging.getLogger('secure_file_transfer')
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
+
+        # Avoid duplicate handlers during Flask reloads.
+        if self.logger.handlers:
+            return
 
         # Create formatters
         formatter = logging.Formatter(
@@ -63,19 +70,37 @@ class SystemLogger:
 
         # File handler
         file_handler = logging.FileHandler(
-            os.path.join(log_dir, 'system.log')
+            os.path.join(log_dir, 'system.log'),
+            encoding='utf-8'
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
 
         # Console handler
-        console_handler = logging.StreamHandler()
+        console_stream = self._build_console_stream()
+        console_handler = logging.StreamHandler(stream=console_stream)
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)
 
         # Add handlers
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
+
+    def _build_console_stream(self):
+        """Return a best-effort UTF-safe console stream across platforms."""
+        stream = getattr(sys, 'stderr', None)
+        if stream is None:
+            return None
+
+        encoding = (getattr(stream, 'encoding', '') or '').lower()
+        if encoding in ('utf-8', 'utf8'):
+            return stream
+
+        buffer = getattr(stream, 'buffer', None)
+        if buffer is not None:
+            return io.TextIOWrapper(buffer, encoding='utf-8', errors='replace')
+
+        return stream
 
     def _initialize_csv_log(self):
         """Create CSV log file with headers if it does not exist yet."""

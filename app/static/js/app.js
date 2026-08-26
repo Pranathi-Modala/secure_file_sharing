@@ -124,7 +124,7 @@ class SecureFileTransferClient {
           }),
         );
 
-        this.showMessage(`✓ Welcome ${username}!`, "success");
+        this.showMessage(`Welcome ${username}!`, "success");
         this.showDashboard();
         this.loadMyFiles();
         this.loadSharedFiles();
@@ -157,7 +157,7 @@ class SecureFileTransferClient {
       const data = await response.json();
 
       if (data.success) {
-        this.showMessage("✓ Registration successful! Now login.", "success");
+        this.showMessage("Registration successful! Now login.", "success");
         this.toggleRegister();
         document.getElementById("input-login-username").value = username;
         document.getElementById("input-login-password").value = "";
@@ -182,7 +182,7 @@ class SecureFileTransferClient {
     localStorage.removeItem("sft_session");
     this.sessionId = null;
     this.currentUser = null;
-    this.showMessage("✓ Logged out", "success");
+    this.showMessage("Logged out", "success");
     this.showAuthPanel();
   }
 
@@ -226,7 +226,7 @@ class SecureFileTransferClient {
 
       if (data.success) {
         this.showMessage(
-          `✓ File uploaded! Encryption key: ${data.encryption_key.substring(0, 20)}...`,
+          `File uploaded! Encryption key: ${data.encryption_key.substring(0, 20)}...`,
           "success",
         );
         fileInput.value = "";
@@ -362,7 +362,7 @@ class SecureFileTransferClient {
       const data = await response.json();
 
       if (data.success) {
-        this.showMessage("✓ File deleted", "success");
+        this.showMessage("File deleted", "success");
         this.loadMyFiles();
       } else {
         this.showMessage(data.message, "error");
@@ -414,7 +414,7 @@ class SecureFileTransferClient {
           ? `\n\nEncryption Key: ${data.encryption_key}`
           : "";
         this.showMessage(
-          `✓ File shared with ${recipient}${keyText}`,
+          `File shared with ${recipient}${keyText}`,
           "success",
         );
         this.closeShareModal();
@@ -454,7 +454,7 @@ class SecureFileTransferClient {
           (f) => f.file_id === fileId,
         ).filename;
         a.click();
-        this.showMessage("✓ File downloaded", "success");
+        this.showMessage("File downloaded", "success");
       } else {
         const error = await response.json();
         this.showMessage(error.message || "Download failed", "error");

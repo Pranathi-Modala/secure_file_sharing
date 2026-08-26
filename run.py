@@ -21,7 +21,7 @@ if __name__ == '__main__':
     """)
     
     # Display configuration
-    print("\n📋 Configuration Loaded:")
+    print("\n Configuration Loaded:")
     print(f"  Environment: {config.config.ENV}")
     print(f"  Debug Mode: {config.config.DEBUG}")
     print(f"  Host: {config.config.HOST}")
@@ -33,7 +33,7 @@ if __name__ == '__main__':
     print(f"  Database URL: {config.config.DATABASE_URL}")
     
     print(f"""
-    ✓ Starting Flask server...
+    Starting Flask server...
     
     Access at: http://{config.config.HOST}:{config.config.PORT}
     

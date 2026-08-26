@@ -4,7 +4,7 @@
 
 ---
 
-## 📋 Project Overview
+## Project Overview
 
 This is a **production-ready Flask backend** for a secure file transfer system with:
 
@@ -59,7 +59,7 @@ secure_file_transfer/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. **Install Python**
 
@@ -113,7 +113,7 @@ Open browser and go to: **http://127.0.0.1:5000**
 
 ---
 
-## 👤 Demo Credentials
+## Demo Credentials
 
 ```
 User 1 (Alice):
@@ -134,7 +134,7 @@ Admin:
 
 ---
 
-## 🏛️ Module Architecture
+## Module Architecture
 
 ### 1. **Encryption Module** (`encryption.py`)
 
@@ -263,7 +263,7 @@ Centralized logging for audit trail.
 
 ---
 
-## 🔌 API Endpoints
+## API Endpoints
 
 ### Authentication Routes (`/api/auth/\*)
 
@@ -416,7 +416,7 @@ User can:
 
 ---
 
-## 🧪 Testing the System
+## Testing the System
 
 ### Test Scenario 1: File Sharing Between Users
 
@@ -500,7 +500,7 @@ app.config['SECRET_KEY'] = 'your-secret-key-here'
 
 ---
 
-## 💾 Data Storage
+## Data Storage
 
 ### Encrypted Files
 
@@ -653,7 +653,7 @@ This architecture is used by:
 
 ---
 
-## 📝 Notes
+## Notes
 
 - **Demo Only:** For production, use established libraries (boto3 for S3, etc.)
 - **Database:** Currently in-memory, extend with SQLAlchemy + PostgreSQL
@@ -663,7 +663,7 @@ This architecture is used by:
 
 ---
 
-## 🎯 Next Steps
+## Next Steps
 
 Enhance the system with:
 
@@ -678,7 +678,7 @@ Enhance the system with:
 
 ---
 
-## 📞 Support
+## Support
 
 For issues:
 

@@ -19,7 +19,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo ✓ Python found
+echo Python found
 echo.
 
 REM Install requirements if not already installed

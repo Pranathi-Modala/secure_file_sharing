@@ -17,7 +17,7 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-echo "✓ Python found: $(python3 --version)"
+echo "Python found: $(python3 --version)"
 echo ""
 
 # Install requirements

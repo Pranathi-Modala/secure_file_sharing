@@ -259,5 +259,5 @@ try:
     config = Config()
     config.validate()
 except ConfigurationError as e:
-    print(f'\n❌ Configuration Error:\n{str(e)}\n', file=sys.stderr)
+    print(f'\n Configuration Error:\n{str(e)}\n', file=sys.stderr)
     sys.exit(1)
